@@ -8,15 +8,27 @@ use win_sys::*;
 
 use crate::ShmemError;
 
+/// ext docs
 #[derive(Clone, Default)]
 pub struct ShmemConfExt {
     allow_raw: bool,
+    remove_on_crash: bool,
 }
 
 impl ShmemConf {
     /// If set to true, enables openning raw shared memory that is not managed by this crate
     pub fn allow_raw(mut self, allow: bool) -> Self {
         self.ext.allow_raw = allow;
+        self
+    }
+
+    /// If true the created file mapping will be removed even if the owner process crashes. Has no
+    /// effect when opening an existing mapping.
+    /// 
+    /// Note that this means the mapping will not be persistent even if the owner gives up ownership 
+    /// before closing their handle.
+    pub fn remove_on_crash(mut self, remove_on_crash: bool) -> Self {
+        self.ext.remove_on_crash = remove_on_crash;
         self
     }
 }
@@ -33,9 +45,13 @@ pub struct MapData {
     file_map: FileMapping,
 
     /// This file is used for shmem persistence. When an owner wants to drop the mapping,
-    /// it opens the file with FILE_FLAG_DELETE_ON_CLOSE, renames the file and closes it.
+    /// it opens the file with `FILE_FLAG_DELETE_ON_CLOSE`, renames the file and closes it.
     /// This makes it so future calls to open the old mapping will fail (as it was renamed) and
     /// deletes the renamed file once all handles have been closed.
+    ///
+    /// If [`ShmemConfExt::remove_on_crash`] is true on creation then `FILE_FLAG_DELETE_ON_CLOSE` is
+    /// also set when the mapping is created. This means the file will be deleted once all handles
+    /// have closed even in the event that the owning process crashes.
     #[allow(dead_code)]
     persistent_file: Option<File>,
 
@@ -135,10 +151,14 @@ fn new_map(
     unique_id: &str,
     mut map_size: usize,
     create: bool,
-    allow_raw: bool,
+    ext: &ShmemConfExt,
+    tmp_dir: Option<PathBuf>,
 ) -> Result<MapData, ShmemError> {
     // Create file to back the shared memory
-    let mut file_path = get_tmp_dir()?;
+    let mut file_path = match tmp_dir {
+        Some(path) => path,
+        None => get_tmp_dir()?,
+    };
     file_path.push(unique_id.trim_start_matches('/'));
     debug!(
         "{} persistent_file at {}",
@@ -146,11 +166,18 @@ fn new_map(
         file_path.to_string_lossy()
     );
 
+    let mut attributes = FILE_ATTRIBUTE_TEMPORARY;
+    
+    // mark mapping for automatic cleanup by OS 
+    if create && ext.remove_on_crash {
+        attributes |= FILE_FLAG_DELETE_ON_CLOSE;
+    }
+
     let mut opt = OpenOptions::new();
     opt.read(true)
         .write(true)
         .share_mode((FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE).0)
-        .attributes((FILE_ATTRIBUTE_TEMPORARY).0);
+        .attributes(attributes.0);
     if create {
         opt.create_new(true);
     } else {
@@ -206,7 +233,7 @@ fn new_map(
         Err(e) => {
             if create {
                 return Err(ShmemError::MapCreateFailed(e.raw_os_error().unwrap() as _));
-            } else if !allow_raw {
+            } else if !ext.allow_raw {
                 return Err(ShmemError::MapOpenFailed(ERROR_FILE_NOT_FOUND.0));
             }
 
@@ -267,8 +294,13 @@ fn new_map(
 }
 
 //Creates a mapping specified by the uid and size
-pub fn create_mapping(unique_id: &str, map_size: usize) -> Result<MapData, ShmemError> {
-    new_map(unique_id, map_size, true, false)
+pub fn create_mapping(
+    unique_id: &str,
+    map_size: usize,
+    ext: &ShmemConfExt,
+    tmp_dir: Option<PathBuf>,
+) -> Result<MapData, ShmemError> {
+    new_map(unique_id, map_size, true, ext, tmp_dir)
 }
 
 //Opens an existing mapping specified by its uid
@@ -276,6 +308,7 @@ pub fn open_mapping(
     unique_id: &str,
     map_size: usize,
     ext: &ShmemConfExt,
+    tmp_dir: Option<PathBuf>,
 ) -> Result<MapData, ShmemError> {
-    new_map(unique_id, map_size, false, ext.allow_raw)
+    new_map(unique_id, map_size, false, ext, tmp_dir)
 }

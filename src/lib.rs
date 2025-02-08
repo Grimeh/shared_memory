@@ -53,6 +53,7 @@ pub struct ShmemConf {
     flink_path: Option<PathBuf>,
     size: usize,
     ext: os_impl::ShmemConfExt,
+    tmp_dir: Option<PathBuf>,
 }
 impl Drop for ShmemConf {
     fn drop(&mut self) {
@@ -100,6 +101,12 @@ impl ShmemConf {
         self
     }
 
+    /// Sets the temporary directory to create the mapping in
+    pub fn tmp_dir(mut self, tmp_dir: PathBuf) -> Self {
+        self.tmp_dir = Some(tmp_dir);
+        self
+    }
+
     /// Create a new mapping using the current configuration
     pub fn create(mut self) -> Result<Shmem, ShmemError> {
         if self.size == 0 {
@@ -118,7 +125,7 @@ impl ShmemConf {
                 // Generate random ID until one works
                 loop {
                     let cur_id = format!("/shmem_{:X}", rand::random::<u64>());
-                    match os_impl::create_mapping(&cur_id, self.size) {
+                    match os_impl::create_mapping(&cur_id, self.size, &self.ext, self.tmp_dir.clone()) {
                         Err(ShmemError::MappingIdExists) => continue,
                         Ok(m) => break m,
                         Err(e) => {
@@ -127,7 +134,11 @@ impl ShmemConf {
                     };
                 }
             }
-            Some(ref specific_id) => os_impl::create_mapping(specific_id, self.size)?,
+            Some(ref specific_id) => os_impl::create_mapping(
+                specific_id,
+                self.size,
+                &self.ext,
+                self.tmp_dir.clone())?,
         };
         debug!("Created shared memory mapping '{}'", mapping.unique_id);
 
@@ -204,7 +215,7 @@ impl ShmemConf {
                 flink_uid.as_str()
             };
 
-            match os_impl::open_mapping(unique_id, self.size, &self.ext) {
+            match os_impl::open_mapping(unique_id, self.size, &self.ext, self.tmp_dir.clone()) {
                 Ok(m) => {
                     self.size = m.map_size;
                     self.owner = false;
