@@ -13,6 +13,7 @@ use crate::ShmemError;
 pub struct ShmemConfExt {
     allow_raw: bool,
     remove_on_crash: bool,
+    tmp_dir: Option<PathBuf>,
 }
 
 impl ShmemConf {
@@ -24,11 +25,17 @@ impl ShmemConf {
 
     /// If true the created file mapping will be removed even if the owner process crashes. Has no
     /// effect when opening an existing mapping.
-    /// 
-    /// Note that this means the mapping will not be persistent even if the owner gives up ownership 
+    ///
+    /// Note that this means the mapping will not be persistent even if the owner gives up ownership
     /// before closing their handle.
     pub fn remove_on_crash(mut self, remove_on_crash: bool) -> Self {
         self.ext.remove_on_crash = remove_on_crash;
+        self
+    }
+
+    /// Sets the temporary directory to create the mapping in
+    pub fn tmp_dir(mut self, tmp_dir: PathBuf) -> Self {
+        self.ext.tmp_dir = Some(tmp_dir);
         self
     }
 }
@@ -152,11 +159,10 @@ fn new_map(
     mut map_size: usize,
     create: bool,
     ext: &ShmemConfExt,
-    tmp_dir: Option<PathBuf>,
 ) -> Result<MapData, ShmemError> {
     // Create file to back the shared memory
-    let mut file_path = match tmp_dir {
-        Some(path) => path,
+    let mut file_path = match ext.tmp_dir {
+        Some(path) => path.clone(),
         None => get_tmp_dir()?,
     };
     file_path.push(unique_id.trim_start_matches('/'));
@@ -167,8 +173,8 @@ fn new_map(
     );
 
     let mut attributes = FILE_ATTRIBUTE_TEMPORARY;
-    
-    // mark mapping for automatic cleanup by OS 
+
+    // mark mapping for automatic cleanup by OS
     if create && ext.remove_on_crash {
         attributes |= FILE_FLAG_DELETE_ON_CLOSE;
     }
@@ -298,9 +304,8 @@ pub fn create_mapping(
     unique_id: &str,
     map_size: usize,
     ext: &ShmemConfExt,
-    tmp_dir: Option<PathBuf>,
 ) -> Result<MapData, ShmemError> {
-    new_map(unique_id, map_size, true, ext, tmp_dir)
+    new_map(unique_id, map_size, true, ext)
 }
 
 //Opens an existing mapping specified by its uid
@@ -308,7 +313,6 @@ pub fn open_mapping(
     unique_id: &str,
     map_size: usize,
     ext: &ShmemConfExt,
-    tmp_dir: Option<PathBuf>,
 ) -> Result<MapData, ShmemError> {
-    new_map(unique_id, map_size, false, ext, tmp_dir)
+    new_map(unique_id, map_size, false, ext)
 }
