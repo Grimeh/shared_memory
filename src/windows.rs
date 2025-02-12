@@ -161,7 +161,7 @@ fn new_map(
     ext: &ShmemConfExt,
 ) -> Result<MapData, ShmemError> {
     // Create file to back the shared memory
-    let mut file_path = match ext.tmp_dir {
+    let mut file_path = match &ext.tmp_dir {
         Some(path) => path.clone(),
         None => get_tmp_dir()?,
     };
